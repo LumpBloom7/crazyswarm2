@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from collections import defaultdict
+from typing import Callable
 
 # import sys
 # import rospy
@@ -14,15 +15,16 @@ from collections import defaultdict
 # from .visualizer import visNull
 
 
-from crazyflie_interfaces.msg import FullState, Position, Status, TrajectoryPolynomialPiece
+from crazyflie_interfaces.msg import FullState, Position, Status, TrajectoryPolynomialPiece, AppChannelMessage
 from crazyflie_interfaces.srv import Arm, GoTo, Land, \
-    NotifySetpointsStop, StartTrajectory, Takeoff, UploadTrajectory
+    NotifySetpointsStop, StartTrajectory, Takeoff, UploadTrajectory, SendAppChannelMessage
 from geometry_msgs.msg import Point, PoseStamped
 import numpy as np
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import DescribeParameters, GetParameters, ListParameters, SetParameters
 
 import rclpy
+import rclpy.client
 import rclpy.node
 import rowan
 from std_srvs.srv import Empty
@@ -196,6 +198,34 @@ class Crazyflie:
         # self.cmdVelocityWorldMsg = VelocityWorld()
         # self.cmdVelocityWorldMsg.header.seq = 0
         # self.cmdVelocityWorldMsg.header.frame_id = '/world'
+
+        self.appChannelMsgSubscriber = node.create_subscription(
+            AppChannelMessage, prefix + "/app_channel",self.app_channel_msg_callback,  1
+        )
+        self.sendAppChannelMessageSrv:rclpy.client.Client = node.create_client(
+            SendAppChannelMessage, prefix + '/send_app_channel_msg')
+        self.sendAppChannelMessageSrv.wait_for_service()
+
+        self.app_channel_cbs = []
+
+    def add_app_channel_cb(self, cb):
+        self.app_channel_cbs.append(cb)
+        
+
+    def app_channel_msg_callback(self, msg : AppChannelMessage):
+        bytes = bytearray(msg.bytes)
+        logger = self.node.get_logger()
+        logger.info(bytes[:13].decode("ascii"))
+
+        for cb in self.app_channel_cbs:
+            cb(bytes)
+
+    def send_app_channel_msg(self, msg: bytes):
+        req = SendAppChannelMessage.Request()
+        req.msg = AppChannelMessage()
+        req.msg.bytes = bytearray(msg)
+
+        self.sendAppChannelMessageSrv.call_async(req)
 
     def setGroupMask(self, groupMask):
         """

@@ -9,8 +9,10 @@ A crazyflie server for communicating with several crazyflies
     2022 - K. N. McGuire (Bitcraze AB)
 """
 
+import cflib.crazyflie
 import rclpy
 from rclpy.node import Node
+import rclpy.publisher
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.duration import Duration
 
@@ -25,9 +27,9 @@ from cflib.crazyflie.mem import Poly4D
 
 from crazyflie_interfaces.srv import Takeoff, Land, GoTo, RemoveLogging, AddLogging
 from crazyflie_interfaces.srv import UploadTrajectory, StartTrajectory, NotifySetpointsStop
-from crazyflie_interfaces.srv import Arm
+from crazyflie_interfaces.srv import Arm, SendAppChannelMessage
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult, ParameterType
-from crazyflie_interfaces.msg import Position, Status, Hover, LogDataGeneric, FullState, VelocityWorld
+from crazyflie_interfaces.msg import Position, Status, Hover, LogDataGeneric, FullState, VelocityWorld, AppChannelMessage
 from motion_capture_tracking_interfaces.msg import NamedPoseArray
 
 from std_srvs.srv import Empty
@@ -88,6 +90,8 @@ class CrazyflieServer(Node):
         }
         self.uri_dict = {}
         self.type_dict = {}
+
+        self.app_channel_publishers: dict[str, rclpy.publisher.Publisher] = {}
 
         # Assign default topic types, variables and callbacks
         self.default_log_type = {"pose": PoseStamped,
@@ -160,6 +164,9 @@ class CrazyflieServer(Node):
             )
 
             # link statistics from CFlib
+
+            cf : cflib.crazyflie.Crazyflie = self.swarm._cfs[link_uri].cf
+
             self.swarm._cfs[link_uri].status = {}
             self.swarm._cfs[link_uri].status["latency"] = 0.0
             self.swarm._cfs[link_uri].cf.link_statistics.latency_updated.add_callback(partial(self._latency_callback, uri=link_uri))
@@ -168,6 +175,7 @@ class CrazyflieServer(Node):
             self.swarm._cfs[link_uri].status["num_tx_unicast"] = 0.0
             self.swarm._cfs[link_uri].cf.link_statistics.downlink_rate_updated.add_callback(partial(self._downlink_rate_callback, uri=link_uri))
 
+            cf.appchannel.packet_received.add_callback(partial(self._app_channel_msg_received, uri=link_uri))
             # check if logging is enabled at startup
             self.swarm._cfs[link_uri].logging = {}
 
@@ -270,7 +278,6 @@ class CrazyflieServer(Node):
             exit()
     
     def _init_topics_and_services(self):
-
         # Create services for the entire swarm and each individual crazyflie
         for uri in self.cf_dict:
             if uri == "all":
@@ -353,6 +360,17 @@ class CrazyflieServer(Node):
                 NamedPoseArray, "/poses",
                 self._poses_changed, qos_profile
             )
+
+            self.app_channel_publishers[uri] = self.create_publisher(
+                AppChannelMessage, name + "/app_channel", 1
+            )
+            self.create_service(
+                SendAppChannelMessage, 
+                name + "/send_app_channel_msg",
+                partial(self._send_app_channel_msg, uri=uri)
+            )
+
+            
 
         self.create_service(Arm, "all/arm", self._arm_callback)
         self.create_service(Takeoff, "all/takeoff", self._takeoff_callback)
@@ -1297,6 +1315,21 @@ class CrazyflieServer(Node):
 
         response.success = True
         return response
+    
+    def _app_channel_msg_received(self, msg : bytes, uri:str):
+        if(uri not in self.app_channel_publishers):
+            return
+        
+        acMsg = AppChannelMessage()
+        acMsg.bytes = msg
+        self.app_channel_publishers[uri].publish(acMsg)
+
+    def _send_app_channel_msg(self, request: SendAppChannelMessage.Request, response, uri:str):
+        cf : cflib.crazyflie.Crazyflie = self.swarm._cfs[uri].cf
+        list = [i for i in request.msg.bytes]
+        cf.appchannel.send_packet(list)
+        return response
+
 
 
 def main(args=None):
