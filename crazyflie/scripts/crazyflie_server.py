@@ -32,6 +32,8 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult, Paramet
 from crazyflie_interfaces.msg import Position, Status, Hover, LogDataGeneric, FullState, VelocityWorld, AppChannelMessage
 from motion_capture_tracking_interfaces.msg import NamedPoseArray
 
+import rclpy.qos
+import rclpy.service
 from std_srvs.srv import Empty
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
@@ -362,7 +364,7 @@ class CrazyflieServer(Node):
             )
 
             self.app_channel_publishers[uri] = self.create_publisher(
-                AppChannelMessage, name + "/app_channel", 1
+                AppChannelMessage, name + "/app_channel", rclpy.qos.qos_profile_services_default
             )
             self.create_service(
                 SendAppChannelMessage, 
